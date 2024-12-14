@@ -82,7 +82,6 @@ struct rq *task_rq_lock(struct task_struct *p, struct rq_flags *rf)
 	__acquires(rq->lock)
 {
 	struct rq *rq;
-	unsigned int backoff = 1; /* Backoff duration in ms */
 
 	for (;;) {
 		raw_spin_lock_irqsave(&p->pi_lock, rf->flags);
@@ -112,17 +111,8 @@ struct rq *task_rq_lock(struct task_struct *p, struct rq_flags *rf)
 		raw_spin_unlock(&rq->lock);
 		raw_spin_unlock_irqrestore(&p->pi_lock, rf->flags);
 
-		while (unlikely(task_on_rq_migrating(p))) {
+		while (unlikely(task_on_rq_migrating(p)))
 			cpu_relax();
-			msleep(backoff);
-			/* Cap at 64ms */
-			if (backoff < 64) {
-				backoff *= 2;
-			}
-		}
-
-		/* Reset backoff if we successfully got the lock */
-		backoff = 1;
 	}
 }
 
