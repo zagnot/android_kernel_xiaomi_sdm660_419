@@ -43,7 +43,7 @@ static int __init proc_cmdline_init(void)
 #ifdef CONFIG_INITRAMFS_IGNORE_SKIP_FLAG
 	proc_command_line_init();
 #endif
-	
+
 	proc_create_single("cmdline", 0, NULL, cmdline_proc_show);
 	return 0;
 }

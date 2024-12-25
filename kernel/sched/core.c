@@ -82,6 +82,7 @@ struct rq *task_rq_lock(struct task_struct *p, struct rq_flags *rf)
 	__acquires(rq->lock)
 {
 	struct rq *rq;
+        unsigned int backoff = 1; /* Backoff duration in ms */
 
 	for (;;) {
 		raw_spin_lock_irqsave(&p->pi_lock, rf->flags);
@@ -111,8 +112,29 @@ struct rq *task_rq_lock(struct task_struct *p, struct rq_flags *rf)
 		raw_spin_unlock(&rq->lock);
 		raw_spin_unlock_irqrestore(&p->pi_lock, rf->flags);
 
-		while (unlikely(task_on_rq_migrating(p)))
-			cpu_relax();
+		/* Determine if we're in an atomic context */
+		if (in_atomic() || in_interrupt()) {
+			/* Atomic context: Use busy-wait with cpu_relax */
+			unsigned int busy_iterations = backoff * 1000;
+			while (unlikely(task_on_rq_migrating(p)) && busy_iterations--) {
+ 				cpu_relax();
+			}
+			if (busy_iterations == 0) {
+				backoff = 1;
+				continue;
+			}
+		} else {
+			/* Non-atomic context: Use msleep for backoff */
+			while (unlikely(task_on_rq_migrating(p))) {
+				msleep(backoff);
+				/* Cap at 64ms */
+				if (backoff < 64) {
+					backoff *= 2;
+				}
+			}
+		}
+		/* Reset backoff if we successfully got the lock */
+		backoff = 1;
 	}
 }
 
@@ -493,7 +515,7 @@ void resched_curr(struct rq *rq)
 
 	lockdep_assert_held(&rq->lock);
 
-	if (test_tsk_need_resched(curr))
+	if (unlikely(test_tsk_need_resched(curr)))
 		return;
 
 	cpu = cpu_of(rq);
@@ -504,10 +526,11 @@ void resched_curr(struct rq *rq)
 		return;
 	}
 
-	if (set_nr_and_not_polling(curr))
+	if (likely(set_nr_and_not_polling(curr))) {
 		smp_send_reschedule(cpu);
-	else
+        } else {
 		trace_sched_wake_idle_without_ipi(cpu);
+        }
 }
 
 void resched_cpu(int cpu)
@@ -616,8 +639,8 @@ void wake_up_nohz_cpu(int cpu)
 static inline bool got_nohz_idle_kick(void)
 {
 	int cpu = smp_processor_id();
-
-	if (!(atomic_read(nohz_flags(cpu)) & NOHZ_KICK_MASK))
+        unsigned long flags = atomic_read(nohz_flags(cpu));
+	if (!(flags & NOHZ_KICK_MASK))
 		return false;
 
 	if (idle_cpu(cpu) && !need_resched())
